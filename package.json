@@ -1,0 +1,10 @@
+{
+  "type": "module",
+  "dependencies": {
+    "@tatumio/tatum": "^4.2.57",
+    "@tatumio/utxo-wallet-provider": "^1.0.7",
+    "bitcoinjs-lib": "^7.0.0",
+    "ecpair": "^3.0.0",
+    "tiny-secp256k1": "^2.2.4"
+  }
+}
