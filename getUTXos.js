@@ -1,5 +1,6 @@
 import https from 'https';
 import { readFileSync } from 'fs';
+import readline from 'readline';
 
 const config = JSON.parse(readFileSync('./config.json', 'utf8'));
 
@@ -184,10 +185,31 @@ export async function getBitcoinBalance(address) {
 
 // Execute the function for the specified address if run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const address = config.address;
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
 
-  getBitcoinBalance(address)
-    .then(result => {
+  const askQuestion = (question) => {
+    return new Promise((resolve) => {
+      rl.question(question, (answer) => {
+        resolve(answer.trim());
+      });
+    });
+  };
+
+  (async () => {
+    try {
+      const address = await askQuestion('Enter Bitcoin address to check: ');
+
+      if (!address) {
+        console.error('Error: Address cannot be empty.');
+        rl.close();
+        process.exit(1);
+      }
+
+      const result = await getBitcoinBalance(address);
+
       console.log('\n=== Bitcoin Balance Analysis ===');
       console.log(`Address: ${address}`);
       console.log(`Incoming (confirmed): ${result.incoming} satoshis`);
@@ -199,9 +221,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       result.unspentUTXOs.forEach(utxo => {
         console.log(`  - ${utxo.utxo}: ${utxo.value} satoshis ${utxo.confirmed ? '(confirmed)' : '(pending)'}`);
       });
-    })
-    .catch(error => {
+
+      rl.close();
+    } catch (error) {
       console.error('Failed to get balance:', error);
+      rl.close();
       process.exit(1);
-    });
+    }
+  })();
 }
