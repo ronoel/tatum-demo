@@ -3,7 +3,6 @@ import { TatumSDK, Network } from '@tatumio/tatum';
 import { UtxoWalletProvider } from '@tatumio/utxo-wallet-provider';
 import { generateAddressFromPrivateKey } from './generateAddresFromPK.js';
 import { getBitcoinBalance } from './getUTXos.js';
-import https from 'https';
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -160,83 +159,10 @@ async function getAmountToSend(availableBalance, feeInSatoshis) {
   }
 }
 
-/**
- * Send Bitcoin transaction using Tatum REST API
- * @param {Array} fromUTXO - Array of UTXO objects with txHash, index, and privateKey
- * @param {Array} to - Array of recipient objects with address and value
- * @param {string} fee - Transaction fee in BTC
- * @param {string} changeAddress - Address to send change
- * @param {string} apiKey - Tatum API key
- * @returns {Promise<string>} Transaction hash
- */
-function sendBitcoinTransaction(fromUTXO, to, fee, changeAddress, apiKey) {
-  return new Promise((resolve, reject) => {
-    const requestBody = {
-      fromUTXO,
-      to,
-      fee,
-      changeAddress
-    };
-
-    const postData = JSON.stringify(requestBody);
-
-    const options = {
-      hostname: 'api.tatum.io',
-      path: '/v3/bitcoin/transaction',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData),
-        'x-api-key': apiKey
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        console.log('\nAPI Response Status:', res.statusCode);
-        console.log('API Response Body:', data);
-
-        try {
-          const result = JSON.parse(data);
-
-          if (res.statusCode === 200 || res.statusCode === 201) {
-            if (result.txId) {
-              resolve(result.txId);
-            } else {
-              resolve(result);
-            }
-          } else {
-            // Enhanced error logging
-            console.error('API Error Details:');
-            console.error('Status Code:', res.statusCode);
-            console.error('Response:', result);
-            reject(new Error(result.message || result.errorCode || `API error: ${res.statusCode} - ${data}`));
-          }
-        } catch (error) {
-          console.error('Failed to parse response:', data);
-          reject(new Error('Failed to parse API response: ' + data));
-        }
-      });
-    });
-
-    req.on('error', (error) => {
-      reject(error);
-    });
-
-    req.write(postData);
-    req.end();
-  });
-}
 
 /**
- * Send Bitcoin transaction using Tatum REST API
- * @param {string} apiKey - Tatum API key
+ * Send Bitcoin transaction using Tatum SDK
+ * @param {TatumSDK} tatumSdk - Initialized Tatum SDK instance
  * @param {string} fromAddress - Sender's address
  * @param {string} privateKey - Sender's private key
  * @param {string} toAddress - Recipient's address
@@ -245,7 +171,7 @@ function sendBitcoinTransaction(fromUTXO, to, fee, changeAddress, apiKey) {
  * @param {Object} balance - Balance object with UTXOs
  * @returns {Promise<string>} Transaction hash
  */
-async function sendTransaction(apiKey, fromAddress, privateKey, toAddress, amountBTC, feeBTC, balance) {
+async function sendTransaction(tatumSdk, fromAddress, privateKey, toAddress, amountBTC, feeBTC, balance) {
   const amountSatoshis = Math.round(amountBTC * 100000000);
   const feeSatoshis = Math.round(feeBTC * 100000000);
 
@@ -288,34 +214,34 @@ async function sendTransaction(apiKey, fromAddress, privateKey, toAddress, amoun
 
   console.log(`\nUsing ${selectedUtxos.length} UTXO(s) totaling ${inputSum} satoshis`);
 
-  // Format UTXOs for Tatum REST API
-  const fromUTXO = selectedUtxos.map(utxo => {
-    const [txHash, index] = utxo.utxo.split(':');
-    return {
-      txHash: txHash,
-      index: parseInt(index),
+  // Prepare payload for Tatum SDK
+  const payloadUtxo = {
+    fromAddress: [{
+      address: fromAddress,
       privateKey: privateKey
-    };
-  });
+    }],
+    to: [{
+      address: toAddress,
+      value: amountBTC
+    }],
+    fee: feeBTC.toString(),
+    changeAddress: fromAddress
+  };
 
-  // Format recipients for Tatum REST API
-  const to = [{
-    address: toAddress,
-    value: amountBTC
-  }];
-
-  console.log('Sending transaction via Tatum REST API...');
+  console.log('Sending transaction via Tatum SDK...');
   console.log('\nRequest Details:');
-  console.log('fromUTXO:', JSON.stringify(fromUTXO.map(u => ({ txHash: u.txHash, index: u.index, privateKey: '***' })), null, 2));
-  console.log('to:', JSON.stringify(to, null, 2));
-  console.log('fee:', feeBTC.toString());
-  console.log('changeAddress:', fromAddress);
+  console.log('fromAddress:', [{ address: fromAddress, privateKey: '***' }]);
+  console.log('to:', JSON.stringify(payloadUtxo.to, null, 2));
+  console.log('fee:', payloadUtxo.fee);
+  console.log('changeAddress:', payloadUtxo.changeAddress);
 
   try {
-    // Send transaction using Tatum REST API
-    const txId = await sendBitcoinTransaction(fromUTXO, to, feeBTC.toString(), fromAddress, apiKey);
+    // Sign and broadcast transaction using Tatum SDK
+    const txHash = await tatumSdk.walletProvider
+      .use(UtxoWalletProvider)
+      .signAndBroadcast(payloadUtxo);
 
-    return txId;
+    return txHash;
   } catch (error) {
     console.error('\nTransaction failed:', error.message);
     throw error;
@@ -472,12 +398,12 @@ async function main() {
       break;
     }
 
-    // Send transaction using Tatum REST API
-    const txHash = await sendTransaction(apiKey, address, privateKey, receiverAddress, amountBTC, feeBTC, balance);
+    // Send transaction using Tatum SDK
+    const txHash = await sendTransaction(tatumSdk, address, privateKey, receiverAddress, amountBTC, feeBTC, balance);
 
     if (txHash) {
       console.log('\n=== Transaction Successful! ===');
-      console.log(`Transaction Hash: ${txHash}`);
+      console.log(`txId: "${txHash}"`);
       console.log(`\nView on Block Explorer:`);
       console.log(`https://blockstream.info/testnet/tx/${txHash}`);
     }
